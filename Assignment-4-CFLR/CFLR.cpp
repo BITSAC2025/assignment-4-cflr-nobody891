@@ -19,7 +19,7 @@ int main(int argc, char **argv)
 
     SVFIRBuilder builder;
     auto pag = builder.build();
-    //pag->dump();
+    pag->dump();
 
     CFLR solver;
     solver.buildGraph(pag);
@@ -39,209 +39,81 @@ void CFLR::solve()
     //  1. implement the grammar production rules into code;
     //  2. implement the dynamic-programming CFL-reachability algorithm.
     //  You may need to add your new methods to 'CFLRGraph' and 'CFLR'.
-    auto &succMap = graph->getSuccessorMap();
-    auto &predMap = graph->getPredecessorMap();
+    if (!graph) return;
 
-    // Step 1: 初始化工作表
-    for (auto &srcPair : succMap)
-    {
-        unsigned src = srcPair.first;
-        for (auto &labelPair : srcPair.second)
-        {
-            EdgeLabel lbl = labelPair.first;
-            for (unsigned dst : labelPair.second)
-                workList.push(CFLREdge(src, dst, lbl));
+    using Node = unsigned;
+    using Label = EdgeLabel;
+
+    std::unordered_map<Node, std::unordered_set<Node>> pt;
+
+    CFLRGraph::DataMap &succ = graph->getSuccessorMap();
+    CFLRGraph::DataMap &pred = graph->getPredecessorMap();
+
+    auto addPt = [&](Node u, Node v) -> bool {
+        auto &s = pt[u];
+        if (s.find(v) == s.end()) {
+            s.insert(v);
+            workList.push(CFLREdge(u, v, PT));
+            return true;
+        }
+        return false;
+    };
+
+    for (const auto &src_pair : succ) {
+        Node src = src_pair.first;
+        const auto &inner = src_pair.second;
+        for (const auto &lbl_pair : inner) {
+            Label lbl = lbl_pair.first;
+            const auto &dsts = lbl_pair.second;
+            if (lbl == Addr || lbl == PT) {
+                for (Node dst : dsts) addPt(src, dst);
+            }
         }
     }
 
-    // Step 2: 主循环
-    while (!workList.empty())
-    {
+
+    while (!workList.empty()) {
         CFLREdge e = workList.pop();
-        unsigned vi = e.src;
-        unsigned vj = e.dst;
-        EdgeLabel A = e.label;
-
-        /// 
-        for (auto &srcPair : succMap)
-        {
-            (void)srcPair; // 避免警告
-        }
-
-        /// PT ::= VF Addr
-        if (A == VF)
-        {
-            for (unsigned vk : succMap[vj][Addr])
-                if (!graph->hasEdge(vi, vk, PT))
-                {
-                    graph->addEdge(vi, vk, PT);
-                    workList.push(CFLREdge(vi, vk, PT));
+        Node u = e.src;
+        Node v = e.dst;
+        auto itPredCopy = pred.find(u);
+        if (itPredCopy != pred.end()) {
+            const auto &predMapForU = itPredCopy->second;
+            auto itCopySet = predMapForU.find(Copy);
+            if (itCopySet != predMapForU.end()) {
+                for (Node t : itCopySet->second) {
+                    addPt(t, v);
                 }
-        }
-
-        /// PT ::= Addr VF
-        if (A == Addr)
-        {
-            for (unsigned vk : succMap[vj][VF])
-                if (!graph->hasEdge(vi, vk, PT))
-                {
-                    graph->addEdge(vi, vk, PT);
-                    workList.push(CFLREdge(vi, vk, PT));
-                }
-        }
-
-        /// VF ::= VF VF
-        if (A == VF)
-        {
-            for (unsigned vk : succMap[vj][VF])
-                if (!graph->hasEdge(vi, vk, VF))
-                {
-                    graph->addEdge(vi, vk, VF);
-                    workList.push(CFLREdge(vi, vk, VF));
-                }
-        }
-
-        /// VF ::= SV Load
-        if (A == SV)
-        {
-            for (unsigned vk : succMap[vj][Load])
-                if (!graph->hasEdge(vi, vk, VF))
-                {
-                    graph->addEdge(vi, vk, VF);
-                    workList.push(CFLREdge(vi, vk, VF));
-                }
-        }
-
-        /// VF ::= PV Load
-        if (A == PV)
-        {
-            for (unsigned vk : succMap[vj][Load])
-                if (!graph->hasEdge(vi, vk, VF))
-                {
-                    graph->addEdge(vi, vk, VF);
-                    workList.push(CFLREdge(vi, vk, VF));
-                }
-        }
-
-        /// VF ::= Store VP
-        if (A == Store)
-        {
-            for (unsigned vk : succMap[vj][VP])
-                if (!graph->hasEdge(vi, vk, VF))
-                {
-                    graph->addEdge(vi, vk, VF);
-                    workList.push(CFLREdge(vi, vk, VF));
-                }
-        }
-
-        /// VF ::= PV Store
-        if (A == PV)
-        {
-            for (unsigned vk : succMap[vj][Store])
-                if (!graph->hasEdge(vi, vk, VF))
-                {
-                    graph->addEdge(vi, vk, VF);
-                    workList.push(CFLREdge(vi, vk, VF));
-                }
-        }
-
-        /// VA ::= LV Load
-        if (A == LV)
-        {
-            for (unsigned vk : succMap[vj][Load])
-                if (!graph->hasEdge(vi, vk, VA))
-                {
-                    graph->addEdge(vi, vk, VA);
-                    workList.push(CFLREdge(vi, vk, VA));
-                }
-        }
-
-        /// SV ::= Store VA
-        if (A == Store)
-        {
-            for (unsigned vk : succMap[vj][VA])
-                if (!graph->hasEdge(vi, vk, SV))
-                {
-                    graph->addEdge(vi, vk, SV);
-                    workList.push(CFLREdge(vi, vk, SV));
-                }
-        }
-
-        /// SV ::= VA Store
-        if (A == VA)
-        {
-            for (unsigned vk : succMap[vj][Store])
-                if (!graph->hasEdge(vi, vk, SV))
-                {
-                    graph->addEdge(vi, vk, SV);
-                    workList.push(CFLREdge(vi, vk, SV));
-                }
-        }
-
-        /// PV ::= PT VA
-        if (A == PT)
-        {
-            for (unsigned vk : succMap[vj][VA])
-                if (!graph->hasEdge(vi, vk, PV))
-                {
-                    graph->addEdge(vi, vk, PV);
-                    workList.push(CFLREdge(vi, vk, PV));
-                }
-        }
-
-        /// VP ::= VA PT
-        if (A == VA)
-        {
-            for (unsigned vk : succMap[vj][PT])
-                if (!graph->hasEdge(vi, vk, VP))
-                {
-                    graph->addEdge(vi, vk, VP);
-                    workList.push(CFLREdge(vi, vk, VP));
-                }
-        }
-
-        /// LV ::= Load VA
-        if (A == Load)
-        {
-            for (unsigned vk : succMap[vj][VA])
-                if (!graph->hasEdge(vi, vk, LV))
-                {
-                    graph->addEdge(vi, vk, LV);
-                    workList.push(CFLREdge(vi, vk, LV));
-                }
-        }
-
-        /// VA ::= VF VA
-        if (A == VF)
-        {
-            for (unsigned vk : succMap[vj][VA])
-                if (!graph->hasEdge(vi, vk, VA))
-                {
-                    graph->addEdge(vi, vk, VA);
-                    workList.push(CFLREdge(vi, vk, VA));
-                }
-        }
-
-        /// VA ::= VA VF
-        if (A == VA)
-        {
-            for (unsigned vk : succMap[vj][VF])
-                if (!graph->hasEdge(vi, vk, VA))
-                {
-                    graph->addEdge(vi, vk, VA);
-                    workList.push(CFLREdge(vi, vk, VA));
-                }
-        }
-
-        /// VF ::= Copy `
-        if (A == Copy)
-        {
-            if (!graph->hasEdge(vi, vj, VF))
-            {
-                graph->addEdge(vi, vj, VF);
-                workList.push(CFLREdge(vi, vj, VF));
             }
         }
 
-    } // end while
+        auto itPredStore = pred.find(u);
+        if (itPredStore != pred.end()) {
+            const auto &predMapForU = itPredStore->second;
+            auto itStoreSet = predMapForU.find(Store);
+            if (itStoreSet != predMapForU.end()) {
+                auto itSuccV = succ.find(v);
+                if (itSuccV != succ.end()) {
+                    const auto &succMapForV = itSuccV->second;
+                    auto itLoadSet = succMapForV.find(Load);
+                    if (itLoadSet != succMapForV.end()) {
+                        for (Node s : itStoreSet->second) {
+                            for (Node x : itLoadSet->second) {
+                                addPt(s, x);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (const auto &p : pt) {
+        Node src = p.first;
+        for (Node dst : p.second) {
+            if (!graph->hasEdge(src, dst, PT)) {
+                graph->addEdge(src, dst, PT);
+            }
+        }
+    }
 }
