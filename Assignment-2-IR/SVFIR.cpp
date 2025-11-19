@@ -42,16 +42,6 @@ int main(int argc, char** argv)
     CallGraph* cg = const_cast<CallGraph*>(pag->getCallGraph());
     ICFG* icfg = const_cast<ICFG*>(pag->getICFG());
 
-
-    //name
-    std::string inputPath = moduleNameVec.empty() ? "module" : moduleNameVec[0];
-    std::string baseName = getBaseName(inputPath);
-    //std::string outputDir = "output";
-
-    //cg->dump(outputDir + "/" + baseName + "_CallGraph");
-    //icfg->dump(outputDir + "/" + baseName + "_ICFG");
-    //cg->dump(baseName + "_CallGraph");
-    //icfg->dump(baseName + "_ICFG");
     pag -> dump(); 
     cg -> dump(); 
     icfg -> dump(); 
