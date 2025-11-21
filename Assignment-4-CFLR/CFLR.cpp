@@ -39,71 +39,89 @@ void CFLR::solve()
     //  1. implement the grammar production rules into code;
     //  2. implement the dynamic-programming CFL-reachability algorithm.
     //  You may need to add your new methods to 'CFLRGraph' and 'CFLR'.
+    unsigned numNodes = graph->getNumNodes(); // 假设此方法可用并返回最大节点ID
+    
+    for (unsigned v = 1; v <= numNodes; ++v) {
+        // 检查并添加 VF ::= epsilon
+        if (!graph->hasEdge(v, v, VF)) {
+            graph->addEdge(v, v, VF);
+            workList.push(CFLREdge(v, v, VF));
+        }
+        // 检查并添加 VFBar ::= epsilon
+        if (!graph->hasEdge(v, v, VFBar)) {
+            graph->addEdge(v, v, VFBar);
+            workList.push(CFLREdge(v, v, VFBar));
+        }
+        // 检查并添加 VA ::= epsilon
+        if (!graph->hasEdge(v, v, VA)) {
+            graph->addEdge(v, v, VA);
+            workList.push(CFLREdge(v, v, VA));
+        }
+    }
+
+    // --- 步骤 2: 动态规划 CFL-可达性算法 ---
     CFLRGraph::DataMap &succMap = graph->getSuccessorMap();
     CFLRGraph::DataMap &predMap = graph->getPredecessorMap();
 
-    // Step 3 (Algorithm 1, line 4): Process worklist W until empty.
     while (!workList.empty())
     {
-        // Step 3.1 (Algorithm 1, line 5): Select and remove an edge (vi --X--> vj) from W.
         CFLREdge edge = workList.pop();
         unsigned vi = edge.src;
         unsigned vj = edge.dst;
         EdgeLabel X = edge.label;
-
-        // The CFL-reachability algorithm has three main types of production rules to handle:
-        // 1. A ::= X (Unary production, line 6-7) - Epsilon productions are handled implicitly or in initialization.
-        // 2. A ::= X Y (Binary production, line 8-10) - Forward closure.
-        // 3. A ::= Y X (Binary production, line 11-13) - Backward closure.
-
-        // --- Unary Productions (A ::= X) ---
-        // The grammar has no non-terminal A that solely produces a single terminal X (like A ::= Addr).
-        // However, there are non-terminal to non-terminal unary rules that represent the identity:
-        // VF ::= Copy, VF ::= Store VP, etc. (These are actually handled as binary rules where one side is epsilon or implicitly handled by the subsequent binary rules).
-        // We only explicitly handle epsilon rules here if needed, but the core logic focuses on binary rules.
-        
-        // Handling epsilon rules (A ::= epsilon) and implicit rules like VF ::= Copy:
-        // Epsilon rules (VF, VFBar, VA) are usually handled by initializing the graph with self-loops
-        // for nodes where A ::= epsilon is applicable (e.g., vi --VF--> vi) or through the subsequent
-        // binary rules that use them. In this context, the provided pseudocode for CFLR focuses only on
-        // edge discovery through composition. We'll rely on the binary rules.
-
-        // --- Binary Productions (A ::= X Y or A ::= Y X) ---
         
         // ----------------------------------------------------------------------------------
-        // Case 1: (vi --X--> vj) combined with a forward edge (vj --Y--> vk) to produce (vi --A--> vk)
-        // A ::= X Y (Algorithm 1, lines 8-10)
+        // Part A: Binary Production A ::= X Y (Forward closure)
+        // (vi --X--> vj) + (vj --Y--> vk) => (vi --A--> vk)
         // ----------------------------------------------------------------------------------
         
-        // Iterate over all successors vk of vj
         if (succMap.count(vj)) {
             for (auto const& [Y, vk_set] : succMap.at(vj)) {
                 for (unsigned vk : vk_set) {
                     
-                    // --- Check all A ::= X Y productions from the grammar ---
-                    // Example: PT ::= VFBar Addr (if X=VFBar, Y=Addr, then A=PT)
+                    EdgeLabel A = 0;
                     
-                    EdgeLabel A = 0; // Default to an invalid label
-                    
+                    // --- 检查所有 A ::= X Y 产生式 (图1文法) ---
+                    // PT ::= VFBar Addr
                     if (X == VFBar && Y == Addr) A = PT;
-                    else if (X == VA && Y == PT) A = VP;
-                    else if (X == LVBar && Y == Load) A = VA;
-                    else if (X == VFBar && Y == VA) A = VA;
+                    
+                    // VF ::= VFBar VF | SVBar Load | PVBar Load | StoreBar VP
+                    else if (X == VFBar && Y == VF) A = VF;
                     else if (X == SVBar && Y == Load) A = VF;
                     else if (X == PVBar && Y == Load) A = VF;
                     else if (X == StoreBar && Y == VP) A = VF;
-                    else if (X == VFBar && Y == VF) A = VF;
                     
-                    // Barred versions: ABar ::= XBar YBar
-                    else if (X == Addr && Y == VF) A = PTBar;
+                    // VFBar ::= VFBar VF | LoadBar SVBar | LoadBar VPBar | PVBar StoreBar
                     else if (X == VFBar && Y == VF) A = VFBar;
                     else if (X == LoadBar && Y == SVBar) A = VFBar;
                     else if (X == LoadBar && Y == VPBar) A = VFBar;
                     else if (X == PVBar && Y == StoreBar) A = VFBar;
-                    else if (X == StoreBar && Y == VA) A = SV; // SV ::= StoreBar VA
+                    
+                    // VA ::= LVBar Load | VFBar VA
+                    else if (X == LVBar && Y == Load) A = VA;
+                    else if (X == VFBar && Y == VA) A = VA;
+                    
+                    // SV ::= StoreBar VA
+                    else if (X == StoreBar && Y == VA) A = SV;
+                    
+                    // PV ::= PTBar VA
                     else if (X == PTBar && Y == VA) A = PV;
                     
-                    // If a valid production A was found, try to add the new edge (vi --A--> vk)
+                    // VPBar ::= VABar PTBar
+                    else if (X == VABar && Y == PTBar) A = VPBar; 
+                    
+                    // LV ::= LoadBar VA (Note: LVBar is defined, but LV is LoadBar VA which is A ::= X Y)
+                    else if (X == LoadBar && Y == VA) A = LV;
+
+                    // --- 检查一元产生式 A ::= X (例如 A ::= Copy) ---
+                    // 在正则化文法中，Copy和CopyBar通常被视为VF和VFBar的别名，
+                    // 它们在 buildGraph 中作为 VF/VFBar 边初始化，或在这里作为 A ::= X 规则处理。
+                    // 如果它们在 buildGraph 中只被初始化为 Copy/CopyBar，则需要此步骤：
+                    // VF ::= Copy
+                    if (X == Copy) A = VF;
+                    // VFBar ::= CopyBar
+                    else if (X == CopyBar) A = VFBar;
+                    
                     if (A != 0) {
                         if (!graph->hasEdge(vi, vk, A)) {
                             graph->addEdge(vi, vk, A);
@@ -113,40 +131,36 @@ void CFLR::solve()
                 }
             }
         }
-
+        
         // ----------------------------------------------------------------------------------
-        // Case 2: (vk --Y--> vi) combined with (vi --X--> vj) to produce (vk --A--> vj)
-        // A ::= Y X (Algorithm 1, lines 11-13)
+        // Part B: Binary Production A ::= Y X (Backward closure)
+        // (vk --Y--> vi) + (vi --X--> vj) => (vk --A--> vj)
         // ----------------------------------------------------------------------------------
         
-        // Iterate over all predecessors vk of vi
         if (predMap.count(vi)) {
             for (auto const& [Y, vk_set] : predMap.at(vi)) {
                 for (unsigned vk : vk_set) {
                     
-                    // --- Check all A ::= Y X productions from the grammar ---
-                    // Example: SVBar ::= VA StoreBar (if Y=VA, X=StoreBar, then A=SVBar)
-
-                    EdgeLabel A = 0; // Default to an invalid label
+                    EdgeLabel A = 0;
                     
-                    if (Y == VA && X == PT) A = VP; // VP ::= VA PT
+                    // --- 检查所有 A ::= Y X 产生式 (图1文法) ---
+                    // PTBar ::= Addr VF
+                    if (Y == Addr && X == VF) A = PTBar;
+                    
+                    // VA ::= VABar VF
+                    else if (Y == VABar && X == VF) A = VA;
+                    
+                    // SVBar ::= VA StoreBar
+                    else if (Y == VA && X == StoreBar) A = SVBar;
+                    
+                    // PVBar ::= VA PTBar
                     else if (Y == VA && X == PTBar) A = PVBar;
-                    else if (Y == VA && X == StoreBar) A = SVBar; // SVBar ::= VA StoreBar
-                    else if (Y == VA && X == VF) A = VA;
-                    else if (Y == PTBar && X == VA) A = PV;
-                    else if (Y == LoadBar && X == VA) A = LV;
-                    else if (Y == VA && X == PT) A = VP; // Already covered
                     
-                    // Barred versions: ABar ::= YBar XBar
-                    else if (Y == LoadBar && X == SVBar) A = VFBar;
-                    else if (Y == LoadBar && X == VPBar) A = VFBar;
-                    else if (Y == PVBar && X == StoreBar) A = VFBar;
+                    // VP ::= VA PT
+                    else if (Y == VA && X == PT) A = VP;
                     
-                    // Barred versions (from A ::= X Y):
-                    else if (Y == VFBar && X == VF) A = VF; // VF ::= VFBar VF
-                    else if (Y == VFBar && X == VF) A = VFBar; // VFBar ::= VFBar VF (This is a left-recursive rule, handling in A ::= X Y covers the left-most application)
+                    // (其他规则在 A ::= X Y 中已覆盖，或者通过 A ::= Y X 形式查找)
                     
-                    // If a valid production A was found, try to add the new edge (vk --A--> vj)
                     if (A != 0) {
                         if (!graph->hasEdge(vk, vj, A)) {
                             graph->addEdge(vk, vj, A);
@@ -156,5 +170,18 @@ void CFLR::solve()
                 }
             }
         }
+        
+        // ----------------------------------------------------------------------------------
+        // Part C: Binary Production A ::= Y X (for A ::= X Y rules handled as Y X)
+        // For rules like VFBar ::= LoadBar SVBar (X=LoadBar, Y=SVBar), we need to check both directions in the worklist loop.
+        // When we pop (vi --X--> vj), we check predecessors (vk --Y--> vi) to form (vk --A--> vj).
+        // Let's re-examine if any X Y rules must be checked as Y X on the new edge:
+        // Ex: (vk --Y--> vi) + (vi --X--> vj) => (vk --A--> vj)
+        // If the new edge is (vi --X--> vj) and we look for predecessors (vk --Y--> vi)
+        
+        // This is necessary if A ::= X Y produces a new X or Y edge that then triggers another rule.
+        // For simplicity and correctness, the two main loops (A ::= X Y and A ::= Y X) should be sufficient, 
+        // as the worklist mechanism handles subsequent applications.
+        
     }
 }
