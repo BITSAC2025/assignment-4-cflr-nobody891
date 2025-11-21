@@ -39,162 +39,122 @@ void CFLR::solve()
     //  1. implement the grammar production rules into code;
     //  2. implement the dynamic-programming CFL-reachability algorithm.
     //  You may need to add your new methods to 'CFLRGraph' and 'CFLR'.
-        if (!graph) return;
+    CFLRGraph::DataMap &succMap = graph->getSuccessorMap();
+    CFLRGraph::DataMap &predMap = graph->getPredecessorMap();
 
-    using Node = unsigned;
-    using Label = EdgeLabel;
-    using Triple = std::tuple<Label, Label, Label>;
-    using Pair = std::pair<Label, Label>;
+    // Step 3 (Algorithm 1, line 4): Process worklist W until empty.
+    while (!workList.empty())
+    {
+        // Step 3.1 (Algorithm 1, line 5): Select and remove an edge (vi --X--> vj) from W.
+        CFLREdge edge = workList.pop();
+        unsigned vi = edge.src;
+        unsigned vj = edge.dst;
+        EdgeLabel X = edge.label;
 
-    auto &succ = graph->getSuccessorMap();
-    auto &pred = graph->getPredecessorMap();
-    auto &W = workList;
+        // The CFL-reachability algorithm has three main types of production rules to handle:
+        // 1. A ::= X (Unary production, line 6-7) - Epsilon productions are handled implicitly or in initialization.
+        // 2. A ::= X Y (Binary production, line 8-10) - Forward closure.
+        // 3. A ::= Y X (Binary production, line 11-13) - Backward closure.
 
-    // --- collect all nodes (from succ and pred maps) ---
-    std::unordered_set<Node> allNodes;
-    for (const auto &p : succ) {
-        allNodes.insert(p.first);
-        for (const auto &inner : p.second) {
-            for (Node dst : inner.second) allNodes.insert(dst);
-        }
-    }
-    for (const auto &p : pred) {
-        allNodes.insert(p.first);
-        for (const auto &inner : p.second) {
-            for (Node dst : inner.second) allNodes.insert(dst);
-        }
-    }
+        // --- Unary Productions (A ::= X) ---
+        // The grammar has no non-terminal A that solely produces a single terminal X (like A ::= Addr).
+        // However, there are non-terminal to non-terminal unary rules that represent the identity:
+        // VF ::= Copy, VF ::= Store VP, etc. (These are actually handled as binary rules where one side is epsilon or implicitly handled by the subsequent binary rules).
+        // We only explicitly handle epsilon rules here if needed, but the core logic focuses on binary rules.
+        
+        // Handling epsilon rules (A ::= epsilon) and implicit rules like VF ::= Copy:
+        // Epsilon rules (VF, VFBar, VA) are usually handled by initializing the graph with self-loops
+        // for nodes where A ::= epsilon is applicable (e.g., vi --VF--> vi) or through the subsequent
+        // binary rules that use them. In this context, the provided pseudocode for CFLR focuses only on
+        // edge discovery through composition. We'll rely on the binary rules.
 
-    // --- Grammar encoding ---
-    // epsilon productions: VF, VA  (they can derive epsilon)
-    std::vector<Label> epsilon;
-    epsilon.push_back(VF);
-    epsilon.push_back(VA);
-
-    // single productions: none in given grammar
-    std::vector<Pair> single;
-
-    // binary productions A ::= L R  (encode decomposed fragments)
-    std::vector<Triple> binary;
-
-    // PT ::= VF Addr
-    binary.emplace_back(PT, VF, Addr);
-    // PT ::= Addr VF
-    binary.emplace_back(PT, Addr, VF);
-
-    // VF fragments (decomposed chain fragments)
-    binary.emplace_back(VF, VF, VF);
-    binary.emplace_back(VF, VF, Copy);
-    binary.emplace_back(VF, Copy, SV);
-    binary.emplace_back(VF, SV, Load);
-    binary.emplace_back(VF, Load, PV);
-    binary.emplace_back(VF, PV, Load);
-    binary.emplace_back(VF, Load, Store);
-    binary.emplace_back(VF, Store, VP);
-
-    // another variant fragments
-    binary.emplace_back(VF, VF, VF); // duplicate safe
-    binary.emplace_back(VF, VF, Copy);
-    binary.emplace_back(VF, Copy, Load);
-    binary.emplace_back(VF, Load, SV);
-    binary.emplace_back(VF, SV, Load);
-    binary.emplace_back(VF, Load, VP);
-    binary.emplace_back(VF, VP, PV);
-    binary.emplace_back(VF, PV, Store);
-
-    // VA decomposed
-    binary.emplace_back(VA, LV, Load);
-    binary.emplace_back(VA, Load, VF);
-    binary.emplace_back(VA, VF, VA);
-    binary.emplace_back(VA, VA, VA);
-    binary.emplace_back(VA, VA, VF);
-
-    // SV
-    binary.emplace_back(SV, Store, VA);
-    binary.emplace_back(SV, VA, Store);
-
-    // PV
-    binary.emplace_back(PV, PT, VA);
-
-    // VP
-    binary.emplace_back(VP, VA, PT);
-
-    // LV
-    binary.emplace_back(LV, Load, VA);
-
-    // --- Step 1: initialize W with all existing edges in the graph ---
-    for (const auto &u_pair : succ) {
-        Node u = u_pair.first;
-        for (const auto &lbl_pair : u_pair.second) {
-            Label lbl = lbl_pair.first;
-            for (Node v : lbl_pair.second) {
-                W.push(CFLREdge(u, v, lbl));
-            }
-        }
-    }
-
-    // --- Step 2: epsilon productions -> add v --A--> v for all nodes v and A in epsilon ---
-    for (Label A : epsilon) {
-        for (Node v : allNodes) {
-            if (!graph->hasEdge(v, v, A)) {
-                graph->addEdge(v, v, A);
-                W.push(CFLREdge(v, v, A));
-            }
-        }
-    }
-
-    // --- Step 3: main loop ---
-    while (!W.empty()) {
-        CFLREdge cur = W.pop();
-        Node vi = cur.src;
-        Node vj = cur.dst;
-        Label X = cur.label;
-
-        // Case 1: single productions A ::= X
-        for (const auto &pr : single) {
-            Label A = pr.first;
-            Label B = pr.second;
-            if (B == X) {
-                if (!graph->hasEdge(vi, vj, A)) {
-                    graph->addEdge(vi, vj, A);
-                    W.push(CFLREdge(vi, vj, A));
+        // --- Binary Productions (A ::= X Y or A ::= Y X) ---
+        
+        // ----------------------------------------------------------------------------------
+        // Case 1: (vi --X--> vj) combined with a forward edge (vj --Y--> vk) to produce (vi --A--> vk)
+        // A ::= X Y (Algorithm 1, lines 8-10)
+        // ----------------------------------------------------------------------------------
+        
+        // Iterate over all successors vk of vj
+        if (succMap.count(vj)) {
+            for (auto const& [Y, vk_set] : succMap.at(vj)) {
+                for (unsigned vk : vk_set) {
+                    
+                    // --- Check all A ::= X Y productions from the grammar ---
+                    // Example: PT ::= VFBar Addr (if X=VFBar, Y=Addr, then A=PT)
+                    
+                    EdgeLabel A = 0; // Default to an invalid label
+                    
+                    if (X == VFBar && Y == Addr) A = PT;
+                    else if (X == VA && Y == PT) A = VP;
+                    else if (X == LVBar && Y == Load) A = VA;
+                    else if (X == VFBar && Y == VA) A = VA;
+                    else if (X == SVBar && Y == Load) A = VF;
+                    else if (X == PVBar && Y == Load) A = VF;
+                    else if (X == StoreBar && Y == VP) A = VF;
+                    else if (X == VFBar && Y == VF) A = VF;
+                    
+                    // Barred versions: ABar ::= XBar YBar
+                    else if (X == Addr && Y == VF) A = PTBar;
+                    else if (X == VFBar && Y == VF) A = VFBar;
+                    else if (X == LoadBar && Y == SVBar) A = VFBar;
+                    else if (X == LoadBar && Y == VPBar) A = VFBar;
+                    else if (X == PVBar && Y == StoreBar) A = VFBar;
+                    else if (X == StoreBar && Y == VA) A = SV; // SV ::= StoreBar VA
+                    else if (X == PTBar && Y == VA) A = PV;
+                    
+                    // If a valid production A was found, try to add the new edge (vi --A--> vk)
+                    if (A != 0) {
+                        if (!graph->hasEdge(vi, vk, A)) {
+                            graph->addEdge(vi, vk, A);
+                            workList.push(CFLREdge(vi, vk, A));
+                        }
+                    }
                 }
             }
         }
 
-        // Case 2: A ::= X Y  (left matches X)
-        for (const auto &t : binary) {
-            Label A, L, R;
-            std::tie(A, L, R) = t;
-            if (L != X) continue;
-            auto it_vj = succ.find(vj);
-            if (it_vj == succ.end()) continue;
-            auto itR = it_vj->second.find(R);
-            if (itR == it_vj->second.end()) continue;
-            for (Node vk : itR->second) {
-                if (!graph->hasEdge(vi, vk, A)) {
-                    graph->addEdge(vi, vk, A);
-                    W.push(CFLREdge(vi, vk, A));
-                }
-            }
-        }
+        // ----------------------------------------------------------------------------------
+        // Case 2: (vk --Y--> vi) combined with (vi --X--> vj) to produce (vk --A--> vj)
+        // A ::= Y X (Algorithm 1, lines 11-13)
+        // ----------------------------------------------------------------------------------
+        
+        // Iterate over all predecessors vk of vi
+        if (predMap.count(vi)) {
+            for (auto const& [Y, vk_set] : predMap.at(vi)) {
+                for (unsigned vk : vk_set) {
+                    
+                    // --- Check all A ::= Y X productions from the grammar ---
+                    // Example: SVBar ::= VA StoreBar (if Y=VA, X=StoreBar, then A=SVBar)
 
-        // Case 3: A ::= Y X  (right matches X)
-        for (const auto &t : binary) {
-            Label A, L, R;
-            std::tie(A, L, R) = t;
-            if (R != X) continue;
-            auto it_vi = pred.find(vi);
-            if (it_vi == pred.end()) continue;
-            auto itL = it_vi->second.find(L);
-            if (itL == it_vi->second.end()) continue;
-            for (Node vk : itL->second) {
-                if (!graph->hasEdge(vk, vj, A)) {
-                    graph->addEdge(vk, vj, A);
-                    W.push(CFLREdge(vk, vj, A));
+                    EdgeLabel A = 0; // Default to an invalid label
+                    
+                    if (Y == VA && X == PT) A = VP; // VP ::= VA PT
+                    else if (Y == VA && X == PTBar) A = PVBar;
+                    else if (Y == VA && X == StoreBar) A = SVBar; // SVBar ::= VA StoreBar
+                    else if (Y == VA && X == VF) A = VA;
+                    else if (Y == PTBar && X == VA) A = PV;
+                    else if (Y == LoadBar && X == VA) A = LV;
+                    else if (Y == VA && X == PT) A = VP; // Already covered
+                    
+                    // Barred versions: ABar ::= YBar XBar
+                    else if (Y == LoadBar && X == SVBar) A = VFBar;
+                    else if (Y == LoadBar && X == VPBar) A = VFBar;
+                    else if (Y == PVBar && X == StoreBar) A = VFBar;
+                    
+                    // Barred versions (from A ::= X Y):
+                    else if (Y == VFBar && X == VF) A = VF; // VF ::= VFBar VF
+                    else if (Y == VFBar && X == VF) A = VFBar; // VFBar ::= VFBar VF (This is a left-recursive rule, handling in A ::= X Y covers the left-most application)
+                    
+                    // If a valid production A was found, try to add the new edge (vk --A--> vj)
+                    if (A != 0) {
+                        if (!graph->hasEdge(vk, vj, A)) {
+                            graph->addEdge(vk, vj, A);
+                            workList.push(CFLREdge(vk, vj, A));
+                        }
+                    }
                 }
             }
         }
-    } // end while
-    // done - all discovered nonterminal-labeled edges have been added to graph
+    }
 }
