@@ -39,7 +39,7 @@ void CFLR::solve()
     //  1. implement the grammar production rules into code;
     //  2. implement the dynamic-programming CFL-reachability algorithm.
     //  You may need to add your new methods to 'CFLRGraph' and 'CFLR'.
-    if (!graph) return;
+        if (!graph) return;
 
     using Node = unsigned;
     using Label = EdgeLabel;
@@ -50,7 +50,7 @@ void CFLR::solve()
     auto &pred = graph->getPredecessorMap();
     auto &W = workList;
 
-    // --- 0. collect all nodes in the graph (keys and targets) ---
+    // --- collect all nodes (from succ and pred maps) ---
     std::unordered_set<Node> allNodes;
     for (const auto &p : succ) {
         allNodes.insert(p.first);
@@ -58,7 +58,6 @@ void CFLR::solve()
             for (Node dst : inner.second) allNodes.insert(dst);
         }
     }
-    // Also consider predecessor map keys (if any nodes only in pred)
     for (const auto &p : pred) {
         allNodes.insert(p.first);
         for (const auto &inner : p.second) {
@@ -66,49 +65,35 @@ void CFLR::solve()
         }
     }
 
-    // --- Grammar: epsilon / single / binary ---
-    // epsilon productions: VF, VA
+    // --- Grammar encoding ---
+    // epsilon productions: VF, VA  (they can derive epsilon)
     std::vector<Label> epsilon;
     epsilon.push_back(VF);
     epsilon.push_back(VA);
 
-    // single productions (A ::= X) - none in given grammar
+    // single productions: none in given grammar
     std::vector<Pair> single;
 
-    // binary productions (A ::= L R)
+    // binary productions A ::= L R  (encode decomposed fragments)
     std::vector<Triple> binary;
-
-    // Fill binary according to the expansion we prepared from the normalized grammar.
-    // NOTE: some long RHS were decomposed into plausible binary fragments to
-    // encode the structure; this follows the conversion we discussed.
 
     // PT ::= VF Addr
     binary.emplace_back(PT, VF, Addr);
     // PT ::= Addr VF
     binary.emplace_back(PT, Addr, VF);
 
-    // For VF long rules we include fragments that appear in sequences.
-    // These are the decomposition pieces to be used by the worklist algorithm.
-    // (This mirrors the previous conversion provided.)
-    // VF ::= VF VF
+    // VF fragments (decomposed chain fragments)
     binary.emplace_back(VF, VF, VF);
-    // VF ::= VF Copy
     binary.emplace_back(VF, VF, Copy);
-    // VF ::= Copy SV
     binary.emplace_back(VF, Copy, SV);
-    // VF ::= SV Load
     binary.emplace_back(VF, SV, Load);
-    // VF ::= Load PV
     binary.emplace_back(VF, Load, PV);
-    // VF ::= PV Load
     binary.emplace_back(VF, PV, Load);
-    // VF ::= Load Store
     binary.emplace_back(VF, Load, Store);
-    // VF ::= Store VP
     binary.emplace_back(VF, Store, VP);
 
-    // second variant expansions from the other long rule:
-    binary.emplace_back(VF, VF, VF); // may be duplicate; safe
+    // another variant fragments
+    binary.emplace_back(VF, VF, VF); // duplicate safe
     binary.emplace_back(VF, VF, Copy);
     binary.emplace_back(VF, Copy, Load);
     binary.emplace_back(VF, Load, SV);
@@ -117,35 +102,27 @@ void CFLR::solve()
     binary.emplace_back(VF, VP, PV);
     binary.emplace_back(VF, PV, Store);
 
-    // VA rules (decomposed)
-    // VA ::= LV Load
+    // VA decomposed
     binary.emplace_back(VA, LV, Load);
-    // VA ::= Load VF
     binary.emplace_back(VA, Load, VF);
-    // VA ::= VF VA
     binary.emplace_back(VA, VF, VA);
-    // VA ::= VA VA
     binary.emplace_back(VA, VA, VA);
-    // VA ::= VA VF
     binary.emplace_back(VA, VA, VF);
 
-    // SV rules
-    // SV ::= Store VA
+    // SV
     binary.emplace_back(SV, Store, VA);
-    // SV ::= VA Store
     binary.emplace_back(SV, VA, Store);
 
-    // PV ::= PT VA
+    // PV
     binary.emplace_back(PV, PT, VA);
 
-    // VP ::= VA PT
+    // VP
     binary.emplace_back(VP, VA, PT);
 
-    // LV ::= Load VA
+    // LV
     binary.emplace_back(LV, Load, VA);
 
-    // --- 1. initialize worklist W <- all existing edges in graph (succ map) ---
-    // For every u, for every label L, for every v in succ[u][L], push u -L-> v
+    // --- Step 1: initialize W with all existing edges in the graph ---
     for (const auto &u_pair : succ) {
         Node u = u_pair.first;
         for (const auto &lbl_pair : u_pair.second) {
@@ -156,7 +133,7 @@ void CFLR::solve()
         }
     }
 
-    // --- 2. epsilon productions: add v --A--> v for all nodes v and each A in epsilon ---
+    // --- Step 2: epsilon productions -> add v --A--> v for all nodes v and A in epsilon ---
     for (Label A : epsilon) {
         for (Node v : allNodes) {
             if (!graph->hasEdge(v, v, A)) {
@@ -166,7 +143,7 @@ void CFLR::solve()
         }
     }
 
-    // --- 3. main loop: while W != empty do ---
+    // --- Step 3: main loop ---
     while (!W.empty()) {
         CFLREdge cur = W.pop();
         Node vi = cur.src;
@@ -185,13 +162,11 @@ void CFLR::solve()
             }
         }
 
-        // Case 2: binary prods where left == X: A ::= X Y
-        // if vi --X--> vj and vj --Y--> vk then add vi --A--> vk
+        // Case 2: A ::= X Y  (left matches X)
         for (const auto &t : binary) {
             Label A, L, R;
             std::tie(A, L, R) = t;
             if (L != X) continue;
-            // get succ[vj][R] if exists
             auto it_vj = succ.find(vj);
             if (it_vj == succ.end()) continue;
             auto itR = it_vj->second.find(R);
@@ -204,13 +179,11 @@ void CFLR::solve()
             }
         }
 
-        // Case 3: binary prods where right == X: A ::= Y X
-        // if vk --Y--> vi and vi --X--> vj then add vk --A--> vj
+        // Case 3: A ::= Y X  (right matches X)
         for (const auto &t : binary) {
             Label A, L, R;
             std::tie(A, L, R) = t;
             if (R != X) continue;
-            // get pred[vi][L] if exists
             auto it_vi = pred.find(vi);
             if (it_vi == pred.end()) continue;
             auto itL = it_vi->second.find(L);
@@ -222,7 +195,6 @@ void CFLR::solve()
                 }
             }
         }
-    } // end while W
-
-    // solve() done. Results stored in graph (new edges added). dumpResult() can use graph.
+    } // end while
+    // done - all discovered nonterminal-labeled edges have been added to graph
 }
